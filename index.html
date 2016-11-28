@@ -1,0 +1,1631 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Tinode example: chat web application in react.js</title>
+    <link rel="shortcut icon" href="img/logo32x32.png" />
+    <!-- Browser styling for Chrome, FF, Opera -->
+    <meta name="theme-color" content="#3949AB">
+    <!-- Google's Roboto font -->
+    <link href="https://fonts.googleapis.com/css?family=Roboto:300,400,400italic,700&subset=latin,cyrillic"
+          rel="stylesheet" type="text/css" />
+    <!-- Google's material design icons -->
+    <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet" />
+    <!-- Styles for local elements -->
+    <link rel="stylesheet" href="css/base.css" />
+    <!-- ReactJs scripts -->
+    <script src="https://unpkg.com/react@15.3.1/dist/react.js"></script>
+    <script src="https://unpkg.com/react-dom@15.3.1/dist/react-dom.js"></script>
+    <script src="https://unpkg.com/babel-core@5.8.38/browser.min.js"></script>
+    <script src="js/tinode.js"></script>
+</head>
+<body>
+<div id="mountPoint"></div>
+<script type="text/babel">
+    // Name of this application, used in the User-Agent
+    var APP_NAME = "TinodeReact/0.8";
+
+    // Host name and port to connect to
+    // var HOST = "api.tinode.co";
+    var HOST = "localhost:6060";
+
+    // API key. Use https://github.com/tinode/chat/tree/master/keygen to generate your own
+    var API_KEY = "AQEAAAABAAD_rAp4DJh05a1HAwFT3A6K";
+
+    // Minimum time between two keypress notifications, milliseconds.
+    var KEYPRESS_DELAY = 5*1000;
+
+    // Delay before sending a {note} for reciving a message, milliseconds.
+    var RECEIVED_DELAY = 500;
+
+    // Delay before sending a read notification, milliseconds.
+    var READ_DELAY = 1000;
+
+    // Mediaquery breakpoint between desktop and mobile, in px. Should match the value
+    // in @meadia (max-size: 640px) in base.css
+    var MEDIA_BREAKPOINT = 640;
+    // Size of rem unit in pixels. Default 1rem = 10pt = 13px.
+    var REM_SIZE = 13;
+
+    // Short representation of time in the past.
+    function shortDateFormat(then) {
+        var now = new Date();
+        if (then.getFullYear() == now.getFullYear()) {
+            if (then.getMonth() == now.getMonth() && then.getDate() == now.getDate()) {
+                return then.toLocaleTimeString(undefined, {hour12: false, hour: '2-digit', minute: '2-digit'});
+            } else {
+                return then.toLocaleDateString(undefined,
+                        {hour12: false, month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'});
+            }
+        }
+        return then.toLocaleDateString(undefined,
+                {hour12: false, year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'});
+    }
+
+    // Make a data URL from public.photo
+    function makeImageUrl(photo) {
+        return (photo && photo.type && photo.data) ?
+        'data:image/' + photo.type + ';base64,' + photo.data : null;
+    }
+
+    /* BEGIN Popup/dropdown menu */
+    var ContextMenu = React.createClass({
+        componentWillUnmount: function() {
+            this.toggle(false);
+        },
+        componentWillReceiveProps: function(nextProps) {
+            this.toggle(nextProps.visible);
+        },
+        toggle: function(visible) {
+            if (visible) {
+                document.addEventListener('mousedown', this.handlePageClick, false);
+                document.addEventListener('keyup', this.handleEscapeKey, false);
+            } else {
+                document.removeEventListener('mousedown', this.handlePageClick, false);
+                document.removeEventListener('keyup', this.handleEscapeKey, false);
+            }
+        },
+        handlePageClick: function(e) {
+            if (ReactDOM.findDOMNode(this).contains(e.target)) {
+                return;
+            }
+            e.preventDefault();
+            e.stopPropagation();
+            this.props.hide();
+        },
+        handleEscapeKey: function(e) {
+            if (e.keyCode === 27) {
+                this.props.hide();
+            }
+        },
+        handleClick: function(e) {
+            e.preventDefault();
+            e.stopPropagation();
+            this.props.hide();
+            this.props.onResult(this.props.items[e.currentTarget.dataset.id]);
+        },
+        render: function() {
+            if (!this.props.visible) {
+                return null;
+            }
+            var position = {
+                left: this.props.position.left + 'px',
+                top: this.props.position.top + 'px'
+            };
+
+            var count = 0;
+            var menuItems = [];
+            var instance = this;
+            this.props.items.map(function(item) {
+                if (item === "-") {
+                    menuItems.push(
+                            <li className="separator" key={count} />
+                    );
+                } else {
+                    menuItems.push(
+                            <li onClick={instance.handleClick} data-id={count} key={count}>{item}</li>
+                    );
+                }
+                count++;
+            });
+            return (
+                    <ul className="menu" style={position}>
+                        {menuItems}
+                    </ul>
+            );
+        }
+    });
+
+    var ContextMenuMixin = {
+        handleContextClick: function(e) {
+            e.preventDefault();
+            e.stopPropagation();
+            this.props.showContextMenu(e.pageY, e.pageX, this.getMenuItems(), this.handleMenuAction);
+        },
+        handleMenuAction: function(action) {
+            var topic = Tinode.getTopic(this.props.topic);
+            switch (action) {
+                case "Edit...":
+                    console.log("Edit topic not implemented");
+                    break;
+                case "Clear messages":
+                    topic.delMessages({before: 0, hard: false});
+                    break;
+                case "Mute":
+                    var m = topic.getAccessMode().clearMode('P');
+                    topic.setMeta({sub: {mode: m.toString()}});
+                    break;
+                case "Unmute":
+                    var m = topic.getAccessMode().addMode('P');
+                    topic.setMeta({sub: {mode: m.toString()}});
+                    break;
+                case "Block":
+                    var m = topic.getAccessMode().addMode('X');
+                    topic.setMeta({sub: {mode: m.toString()}});
+                    break;
+                case "Unblock":
+                    var m = topic.getAccessMode().clearMode('X').addMode('RWP');
+                    topic.setMeta({sub: {mode: m.toString()}});
+                    break;
+                case "Delete":
+                    topic.delTopic();
+                    break;
+                default: break;
+            }
+        },
+        getMenuItems: function() {
+            var mode = Tinode.getMeTopic().getAccessMode(this.props.topic);
+            if (Tinode.getTopicType(this.props.topic) === "grp") {
+                return ["Edit...", "Clear messages", mode.canPresence() ? "Mute" : "Unmute",
+                    mode.isBanned() ? "Unblock" : "Block", "Delete"];
+            } else {
+                return ["Clear messages", mode.canPresence() ? "Mute" : "Unmute",
+                    mode.isBanned() ? "Unblock" : "Block", "Delete"];
+            }
+        }
+    };
+    /* END Popup/dropdown menu */
+
+    /* BEGIN Login: a login form */
+    var LoginView = React.createClass({
+        getInitialState: function() {
+            return {
+                login: this.props.login,
+                password: '',
+                errorCleared: false
+            };
+        },
+        handleLoginChange: function(e) {
+            if (!this.state.errorCleared) {
+                this.props.onClearError();
+                this.setState({errorCleared: true});
+            }
+            this.setState({login: e.target.value});
+        },
+        handlePasswordChange: function(e) {
+            if (!this.state.errorCleared) {
+                this.props.onClearError();
+                this.setState({errorCleared: true});
+            }
+            this.setState({password: e.target.value});
+        },
+        handleSubmit: function(e) {
+            e.preventDefault();
+            this.setState({errorCleared: false});
+            this.props.onLogin(this.state.login.trim(), this.state.password.trim());
+        },
+        render: function() {
+            var submitClasses = "blue";
+            if (this.props.disabled) {
+                submitClasses += " disabled";
+            }
+            return (
+                    <div>
+                        <form id="login-form" onSubmit={this.handleSubmit}>
+                            <input type="text" id="inputLogin"
+                                   placeholder="Login (alice, bob, carol, dave, frank)"
+                                   value={this.state.login}
+                                   onChange={this.handleLoginChange}
+                                   required autoFocus />
+                            <input type="password" id="inputPassword"
+                                   placeholder="Password (alice123, bob123, ...)"
+                                   value={this.state.password}
+                                   onChange={this.handlePasswordChange}
+                                   required />
+                            <div className="dialog-buttons">
+                                <button className={submitClasses} type="submit">Sign in</button>
+                            </div>
+                        </form>
+                    </div>
+            );
+        }
+    })
+    /* END Login */
+
+    /* BEGIN Account registration */
+
+    var CreateAccountView = React.createClass({
+        getInitialState: function() {
+            return {
+                login: '',
+                password: '',
+                password2: '',
+                fn: '', // full/formatted name
+                imageDataUrl: null,
+                errorCleared: false
+            };
+        },
+        handleLoginChange: function(e) {
+            this.setState({login: e.target.value});
+        },
+        handlePasswordChange: function(e) {
+            this.setState({password: e.target.value});
+        },
+        handlePassword2Change: function(e) {
+            this.setState({password2: e.target.value});
+        },
+        handleFnChange: function(e) {
+            this.setState({fn: e.target.value});
+        },
+        handleImageChanged: function(img) {
+            this.setState({imageDataUrl: img});
+        },
+        handleSubmit: function(e) {
+            e.preventDefault();
+            if (this.state.password.trim() != this.state.password2.trim()) {
+                // FIXME(gene): report an error here.
+            } else {
+                this.setState({errorCleared: false});
+                var vcard = null;
+
+                if ((this.state.fn && this.state.fn.trim()) || this.state.imageDataUrl) {
+                    vcard = {};
+                    if (this.state.fn) {
+                        vcard.fn = this.state.fn.trim();
+                    }
+                    if (this.state.imageDataUrl) {
+                        var dataStart = this.state.imageDataUrl.indexOf(",");
+                        vcard.photo = {
+                            data: this.state.imageDataUrl.substring(dataStart+1),
+                            type: "jpg"
+                        };
+                    }
+                }
+                this.props.onCreateAccount(this.state.login.trim(), this.state.password.trim(), vcard);
+            }
+        },
+        render: function() {
+            var submitClasses = "blue";
+            if (this.props.disabled) {
+                submitClasses += " disabled";
+            }
+            return (
+                    <div>
+                        <form className="panel-form" onSubmit={this.handleSubmit}>
+                            <div className="panel-form-one">
+                                <div className="panel-form-two">
+                                    <input type="text" placeholder="Login"
+                                           value={this.state.login} onChange={this.handleLoginChange} required autoFocus />
+                                    <input type="password" placeholder="Password"
+                                           value={this.state.password} onChange={this.handlePasswordChange} required />
+                                    <input type="password" placeholder="Repeat password"
+                                           value={this.state.password2} onChange={this.handlePassword2Change} required />
+                                </div>
+                                <AvatarUpload onImageChanged={this.handleImageChanged} />
+                            </div>
+                            <input type="text" placeholder="Full name, e.g. John Doe"
+                                   value={this.state.fn} onChange={this.handleFnChange} />
+                            <div className="dialog-buttons">
+                                <button className={submitClasses} type="submit">Sign up</button>
+                            </div>
+                        </form>
+                    </div>
+            );
+        }
+    });
+
+    var AvatarUpload = React.createClass({
+        getInitialState: function() {
+            return {
+                dataUrl: null
+            };
+        },
+        handleFileUpload(e) {
+            var instance = this;
+            var img = new Image();
+            img.crossOrigin = 'Anonymous';
+            img.onload = function() {
+                var canvas = document.createElement('CANVAS');
+                canvas.width = canvas.height = 64;
+                var ctx = canvas.getContext('2d');
+                var sx = 0, sy = 0, size;
+                if (this.height > this.width) {
+                    size = this.width;
+                    sy = (this.height - size) / 2;
+                } else {
+                    size = this.height;
+                    sx = (this.width - size) / 2;
+                }
+                ctx.imageSmoothingEnabled = true;
+                ctx.drawImage(this, sx, sy, size, size, 0, 0, 64, 64);
+                var bits = canvas.toDataURL("image/jpg");
+                canvas = null;
+
+                instance.setState({dataUrl: bits});
+                instance.props.onImageChanged(bits);
+            };
+            img.src = URL.createObjectURL(e.target.files[0]);
+        },
+        render: function() {
+            return (
+                    <div className="avatar-upload">
+                        {this.state.dataUrl ?
+                                <img src={this.state.dataUrl} className="preview" /> :
+                                <div className="blank">64&times;64</div>}
+                        <input type="file" id="file-input-avatar" className="inputfile hidden"
+                               accept="image/*" onChange={this.handleFileUpload} />
+                        <label htmlFor="file-input-avatar" className="round">
+                            <i className="material-icons">file_upload</i>
+                        </label>
+                    </div>
+            );
+        }
+    });
+    /* END Account registration */
+
+    /* BEGIN Tinode config panel */
+    var SettingsView = React.createClass({
+        getInitialState: function() {
+            return {
+                hostName: this.props.serverAddress,
+                transport: "def"
+            };
+        },
+        handleSubmit: function(e) {
+            e.preventDefault();
+            this.props.onUpdate(this.state.hostName, this.state.transport);
+        },
+        handleHostNameChange: function(e) {
+            this.setState({hostName: e.target.value});
+        },
+        handleTransportSelected: function(e) {
+            this.setState({transport: e.currentTarget.value});
+        },
+        render: function() {
+            var names = {def: "default", ws: "websocket", lp: "long polling"};
+            var transportOptions = [];
+            var instance = this;
+            ["def", "ws", "lp"].map(function(item){
+                var id = "transport-" + item;
+                var name = names[item];
+                transportOptions.push(
+                        <li key={item}>
+                            <input type="radio" id={id} name="transport-select" value={item}
+                                   checked={instance.state.transport === item}
+                                   onChange={instance.handleTransportSelected} />
+                            <label htmlFor={id}>{name}</label>
+                        </li>
+                );
+            });
+            return (
+                    <form id="settings-form" onSubmit={this.handleSubmit}>
+                        <p>This form does not do anything yet</p>
+                        <label htmlFor="host-name">Host:</label>
+                        <input type="text" id="host-name" placeholder="api.tinode.co"
+                               value={this.state.hostName} onChange={this.handleHostNameChange} required autoFocus />
+                        <p>Wire transport:</p>
+                        <ul>
+                            {transportOptions}
+                        </ul>
+                        <div className="dialog-buttons">
+                            <button type="submit" className="blue">Update</button>
+                        </div>
+                    </form>
+            );
+        }
+    });
+    /* END Tinode config panel */
+
+    /* BEGIN Manage side panel - handle Login, Account Registration, Contacts, NewTopic views */
+    var SideNavbar = React.createClass({
+        render: function() {
+            var avatar = null;
+            if (this.props.avatar === true) {
+                avatar = <i id="self-avatar" className="material-icons">account_box</i>;
+            } else if (this.props.avatar) {
+                avatar = <img id="self-avatar" alt="avatar" src={this.props.avatar} />;
+            }
+            return (
+                    <div id="side-caption-panel">
+                        {avatar}
+                        <div id="sidepanel-title" className="panel-title">{this.props.title}</div>
+                        {this.props.state === 'login' ?
+                                <SideNavbar.MenuStart onSignUp={this.props.onSignUp} onSettings={this.props.onSettings} /> :
+                                this.props.state === 'settings' ?
+                                        <SideNavbar.MenuCancel onCancel={this.props.onCancel} /> :
+                                        this.props.state === 'edit-account' ?
+                                                <SideNavbar.MenuCancel onCancel={this.props.onCancel} /> :
+                                                this.props.state === 'register' ?
+                                                        <SideNavbar.MenuCancel onCancel={this.props.onCancel} /> :
+                                                        this.props.state === 'contacts' ?
+                                                                <SideNavbar.MenuContacts onNewTopic={this.props.onNewTopic} onSettings={this.props.onSettings} /> :
+                                                                this.props.state === 'new-topic' ?
+                                                                        <SideNavbar.MenuCancel onCancel={this.props.onCancel} /> :
+                                                                        null}
+                    </div>
+            );
+        }
+    })
+
+    SideNavbar.MenuStart = React.createClass({
+        render: function() {
+            return (
+                    <div>
+                        <a href="#" onClick={this.props.onSignUp}><i className="material-icons">person_add</i></a>
+                        &nbsp;
+                        <a href="#" onClick={this.props.onSettings}><i className="material-icons">settings</i></a>
+                    </div>
+            );
+        }
+    });
+
+    SideNavbar.MenuCancel = React.createClass({
+        render: function() {
+            return (
+                    <a href="#" onClick={this.props.onCancel}><i className="material-icons">close</i></a>
+            );
+        }
+    })
+
+    SideNavbar.MenuContacts = React.createClass({
+        render: function() {
+            return (
+                    <div>
+                        <a href="#" onClick={this.props.onNewTopic}><i className="material-icons">chat</i></a>
+                        &nbsp;
+                        <a href="#" onClick={this.props.onSettings}><i className="material-icons">settings</i></a>
+                    </div>
+            );
+        }
+    })
+
+    var SidepanelView = React.createClass({
+        getInitialState: function() {
+            return {
+                showErrorText: true,
+            };
+        },
+        handleClearErrorText: function() {
+            this.setState({showErrorText: false});
+        },
+        handleLoginRequested: function(login, password) {
+            this.props.onLoginRequest(login, password);
+            this.setState({showErrorText: true});
+        },
+        render: function() {
+            var title = null;
+            var avatar = false;
+            switch (this.props.state) {
+                case 'login':
+                    title = "Sign In"; break;
+                case 'register':
+                    title = "Create Account"; break;
+                case 'settings':
+                    title = "Settings"; break;
+                case 'edit-account':
+                    title = "Edit Account"; break;
+                case 'contacts':
+                    title = this.props.title;
+                    avatar = this.props.avatar ? this.props.avatar : true;
+                    break;
+                case 'new-topic':
+                    title = "Start New Chat";
+                    break;
+                default:;
+            };
+            return (
+                    <div id="sidepanel" className={this.props.hideSelf ? 'nodisplay' : null}>
+                        <SideNavbar state={this.props.state}
+                                    title={title} avatar={avatar}
+                                    onSignUp={this.props.onSignUp}
+                                    onSettings={this.props.onSettings}
+                                    onNewTopic={this.props.onNewTopic}
+                                    onCancel={this.props.onCancel} />
+
+                        <SidepanelView.ErrorPanel
+                                showError={this.state.showErrorText}
+                                errorText={this.props.errorText} />
+
+                        {this.props.state === 'login' ?
+                                <LoginView login={this.props.login}
+                                           disabled={this.props.loginDisabled}
+                                           onLogin={this.handleLoginRequested}
+                                           onClearError={this.handleClearErrorText} /> :
+
+                                this.props.state === 'register' ?
+                                        <CreateAccountView
+                                                onCreateAccount={this.props.onCreateAccount}
+                                                onCancel={this.props.onCancel} /> :
+
+                                        this.props.state === 'settings' ?
+                                                <SettingsView onCancel={this.props.onCancel}
+                                                              serverAddress={this.props.serverAddress}
+                                                              onUpdate={this.props.onConnectionSettings}
+                                                /> :
+
+                                                this.props.state === 'edit-account' ?
+                                                        <EditAccountView onCancel={this.props.onCancel} /> :
+
+                                                        this.props.state === 'contacts' ?
+                                                                <ContactsView
+                                                                        data={this.props.subscriptions}
+                                                                        topicSelected={this.props.topicSelected}
+                                                                        showContextMenu={this.props.showContextMenu}
+                                                                        onTopicSelected={this.props.onTopicSelected} /> :
+
+                                                                this.props.state === 'new-topic' ?
+                                                                        <NewTopicView
+                                                                                data={this.props.subscriptions}
+                                                                                onSearchContacts={this.props.onSearchContacts}
+                                                                                onCreateTopic={this.props.onCreateTopic} /> :
+
+                                                                        null}
+                    </div>
+            );
+        }
+    });
+
+    SidepanelView.ErrorPanel = React.createClass({
+        render: function() {
+            var errorClass = null;
+            var errorText = ' ';
+            if (this.props.errorText && this.props.showError) {
+                errorClass = "error-alert";
+                errorText = this.props.errorText;
+            }
+            return (
+                    <div id="alert-box" className={errorClass}>{errorText}</div>
+            );
+        }
+    });
+
+    /* END Side panel */
+
+    /* EditAccount parameters */
+    var EditAccountView = React.createClass({
+        render: function() {
+            return (
+                    <form id="edit-account">
+                        <p>Not implemented</p>
+                    </form>
+            );
+        }
+    });
+    /* END EditAccount */
+
+    /* BEGIN Contact list (list of topics) */
+    /* A single topic */;
+    var Contact = React.createClass({
+        mixins: [ContextMenuMixin],
+        handleClick: function(e) {
+            e.preventDefault();
+            e.stopPropagation();
+            this.props.onSelected(this.props.topic);
+        },
+        render: function() {
+            var title = this.props.title;
+            if (!title) {
+                title = <i>unknown</i>;
+            } else if (title.length > 30) {
+                title = title.substring(0, 28) + "...";
+            }
+            var selected = (this.props.selected === this.props.topic) ? "selected" : null;
+            var avatar = this.props.avatar ?
+                    <img src={this.props.avatar} className="avatar" /> :
+                    (Tinode.getTopicType(this.props.topic) === "grp") ?
+                            <i className="material-icons">group</i> :
+                            <i className="material-icons">person</i>;
+            return (
+                    <li className={selected} onClick={this.handleClick}>
+                        <div className="avatar-box">
+                            {avatar}
+                            {this.props.now ? <span className="online"></span> : null}
+                        </div>
+                        <div className="text-box">
+                            <div><span className="contact-title">{title}</span>
+                                {this.props.unread > 0 ? <Contact.Unread count={this.props.unread} /> : null}</div>
+                            {this.props.comment ? <div>{this.props.comment}</div> : null}
+                        </div>
+                        {this.props.showContextMenu ?
+                                <span className="menuTrigger">
+                  <a href="#" onClick={this.handleContextClick}>
+                    <i className="material-icons">expand_more</i>
+                  </a>
+                </span> : null}
+                    </li>
+            );
+        }
+    });
+
+    /*
+     <ContextMenu items={this.props.contactMenuItems}
+     topic={this.props.topic}
+     onResult={this.handleMenuAction}
+     visible={this.state.menuShownFor ? true : false} />
+     */
+
+    /* The counter of unread messages in the topic */
+    Contact.Unread = React.createClass({
+        render: function() {
+            var showUnreadBadge = null;
+            if (this.props.count > 0) {
+                var count = this.props.count > 9 ? "9+" : this.props.count;
+                showUnreadBadge = <span className="badge">{count}</span>;
+            }
+            return (
+                    <span>{showUnreadBadge}</span>
+            );
+        }
+    });
+
+    /* ContactsView holds all contacts-related stuff */
+    var ContactsView = React.createClass({
+        componentWillMount: function() {
+            var me = Tinode.getMeTopic();
+            me.onContactUpdate = this.tnMeContactUpdate;
+            me.onData = this.tnInvite;
+            me.onSubsUpdated = this.tnMeSubsUpdated;
+        },
+        componentWillUnmount: function() {
+            var me = Tinode.getMeTopic();
+            me.onContactUpdate = undefined;
+            me.onData = undefined;
+            me.onSubsUpdated = undefined;
+        },
+        // Reactions to updates to the contact list.
+        tnMeContactUpdate: function(what, cont) {
+            if (what === "on" || what === "off" || what === "read") {
+                this.forceUpdate();
+            } else if (what === "msg") {
+                // New message received
+
+                // Skip update if the topic is currently open, otherwise the badge will annoyingly flash.
+                if (this.props.topicSelected !== cont.topic) {
+                    this.forceUpdate();
+                }
+            } else if (what === "recv") {
+                // Explicitly ignoring "recv" -- it causes no visible updates to contact list.
+            } else if (what === "gone" || what === "unsub") {
+                // Topic deleted or user unsubscribed. Remove topic from view.
+
+                // If the currently selected topic is gone, clear the selection.
+                if (this.props.topicSelected === cont.topic) {
+                    this.props.onTopicSelected(null);
+                }
+                // Redraw without the deleted topic.
+                this.forceUpdate();
+            } else {
+                // TODO(gene): handle other types of notifications:
+                // * ua -- user agent changes (may display a pictogram for mobile/desktop)
+                // * upd -- topic 'public' updated (fetch new public and refresh)
+                // * del -- messages deleted (hard or soft) -- reset pill counter
+                console.log("changed (not updating for it): " + what + " in: " + cont.topic);
+            }
+        },
+        tnInvite: function(invite) {
+            console.log(invite);
+        },
+        tnMeSubsUpdated: function(names) {
+            this.forceUpdate();
+        },
+        render: function() {
+            var contactNodes = [];
+            Tinode.getMeTopic().contacts(function(c) {
+                var unread = c.seq;
+                if (c.read > 0) {
+                    unread -= c.read;
+                }
+                contactNodes.push(
+                        <Contact
+                                title={c.public ? c.public.fn : null}
+                                avatar={makeImageUrl(c.public ? c.public.photo : null)}
+                                comment={c.private}
+                                unread={unread} now={c.online}
+                                selected={this.props.topicSelected}
+                                onSelected={this.props.onTopicSelected}
+                                showContextMenu={this.props.showContextMenu}
+                                topic={c.topic}
+                                key={c.topic} />
+                );
+            }, this);
+
+            return (
+                    <div className="contacts-panel">
+                        <ul className="contact-box">
+                            {contactNodes}
+                        </ul>
+                    </div>
+            );
+        }
+    });
+    /* END Contact list */
+
+    /* BEGIN Create new topic and invite users or send an invite */
+    var NewTopicView = React.createClass({
+        getInitialState: function() {
+            return {
+                tabSelected: "p2p",
+                searchQuery: '',
+                contactSelected: null
+            };
+        },
+        componentWillMount: function() {
+            var fnd = Tinode.getFndTopic();
+            fnd.onSubsUpdated = this.fndSubsUpdated;
+            fnd.onMetaDesc = this.fndMetaDesc;
+            if (fnd.isSubscribed()) {
+                this.setState({searchQuery: fnd.private.toString()});
+            } else {
+                fnd.subscribe({get: {sub: {}, desc: {}}});
+            }
+        },
+        componentWillUnmount: function() {
+            var fnd = Tinode.getFndTopic();
+            fnd.onSubsUpdated = undefined;
+            fnd.onMetaDesc = undefined;
+        },
+        fndMetaDesc: function(desc) {
+            if (desc.private) {
+                this.setState({searchQuery: desc.private.toString()});
+            }
+        },
+        fndSubsUpdated: function() {
+            //console.log(keys);
+            this.forceUpdate();
+        },
+        handleTabClick: function(e) {
+            e.preventDefault();
+            this.setState({tabSelected: e.currentTarget.dataset.id, contactSelected: null});
+        },
+        handleContactSelected: function(sel) {
+            if (this.state.tabSelected === "p2p") {
+                this.props.onCreateTopic(sel, undefined);
+            } else {
+                console.log("handle group invite " + sel);
+            }
+        },
+        handleGroupSubmit: function(name, dataUrl) {
+            var vcard = null;
+            if (name || dataUrl) {
+                vcard = {
+                    fn: name,
+                };
+                if (dataUrl) {
+                    var dataStart = dataUrl.indexOf(",");
+                    vcard.photo = {
+                        data: dataUrl.substring(dataStart+1),
+                        type: "jpg"
+                    };
+                }
+            }
+            this.props.onCreateTopic(undefined, vcard);
+        },
+        render: function() {
+            return (
+                    <div className="flex-column">
+                        <ul className="tabbar">
+                            <li className={this.state.tabSelected === "p2p" ? "active" : null}>
+                                <a href="#" data-id="p2p" onClick={this.handleTabClick}>1:1</a>
+                            </li>
+                            <li className={this.state.tabSelected === "grp" ? "active" : null}>
+                                <a href="#"  data-id="grp" onClick={this.handleTabClick}>group</a>
+                            </li>
+                        </ul>
+                        {this.state.tabSelected === "grp" ?
+                                <NewTopicView.Group onSubmit={this.handleGroupSubmit} /> :
+                                <div className="flex-column">
+                                    <NewTopicView.SearchContacts type="p2p"
+                                                                 searchQuery={this.state.searchQuery}
+                                                                 onSearchContacts={this.props.onSearchContacts} />
+                                    <NewTopicView.ContactsList onContactSelected={this.handleContactSelected} type="p2p" />
+                                </div>}
+                    </div>
+            );
+        }
+    });
+
+    NewTopicView.Group = React.createClass({
+        getInitialState: function() {
+            return {
+                fn: '', // full/formatted name
+                imageDataUrl: null
+            };
+        },
+        handleFnChange: function(e) {
+            this.setState({fn: e.target.value});
+        },
+        handleImageChanged: function(img) {
+            this.setState({imageDataUrl: img});
+        },
+        handleSubmit: function(e) {
+            e.preventDefault();
+            if (this.state.fn && this.state.fn.trim()) {
+                this.props.onSubmit(this.state.fn.trim(), this.state.imageDataUrl);
+            }
+        },
+        render: function() {
+            var submitClasses = "blue";
+            if (this.props.disabled) {
+                submitClasses += " disabled";
+            }
+            return (
+                    <form className="panel-form" onSubmit={this.handleSubmit}>
+                        <div className="panel-form-one">
+                            <div className="panel-form-two">
+                                <input type="text" placeholder="Name of the topic to create"
+                                       value={this.state.fn} onChange={this.handleFnChange} autoFocus required />
+                                <div className="dialog-buttons">
+                                    <button className={submitClasses} type="submit">Create</button>
+                                </div>
+                            </div>
+                            <AvatarUpload onImageChanged={this.handleImageChanged} />
+                        </div>
+                    </form>
+            );
+        }
+    });
+
+    NewTopicView.SearchContacts = React.createClass({
+        getInitialState: function() {
+            return {
+                search: this.props.searchQuery
+            };
+        },
+        componentWillReceiveProps: function(nextProps) {
+            this.setState({search: nextProps.searchQuery});
+        },
+        handleSearchChange: function(e) {
+            this.setState({search: e.target.value});
+        },
+        handleSearch: function(e) {
+            e.preventDefault();
+            // Split query string by either space or comma, filter out empty strings.
+            var query = this.state.search.split(/[,\s]/).filter(Boolean);
+            if (query.length > 0) {
+                this.props.onSearchContacts(query);
+            }
+        },
+        handleKeyPress: function(e) {
+            if (e.key === 'Enter') {
+                this.handleSearch(e);
+            }
+        },
+        render: function() {
+            return (
+                    <form className="panel-form" onSubmit={this.handleFindContacts}>
+                        <div className="panel-form-one">
+                            <input type="text" placeholder="Comma separated list: email:alice@example.com, tel:17025550003..."
+                                   value={this.state.search} onChange={this.handleSearchChange} onKeyPress={this.handleKeyPress} required />
+                            <a href="#" onClick={this.handleSearch}>
+                                <i className="material-icons">search</i>
+                            </a>
+                        </div>
+                    </form>
+            );
+        }
+    });
+
+    NewTopicView.ContactsList = React.createClass({
+        getInitialState: function() {
+            return {
+                selectedUser: null
+            };
+        },
+        handleSelectionChange: function(sel) {
+            if (this.props.type === "p2p") {
+                this.props.onContactSelected(sel);
+            } else {
+                console.log(sel);
+            }
+        },
+        render: function() {
+            var contactNodes = [];
+            // Don't attempt to create P2P topics which already exist. Server will reject the duplicates.
+            var me = Tinode.getMeTopic();
+            Tinode.getFndTopic().subscribers(function(s) {
+                var cont = me ? me.getContact(s.user) : null;
+                var key = cont ? cont.topic : s.user;
+
+                contactNodes.push(
+                        <Contact
+                                title={((s.public && s.public.fn) || s.private)}
+                                avatar={makeImageUrl(s.public ? s.public.photo : null)}
+                                selected={this.state.selectedUser}
+                                onSelected={this.handleSelectionChange}
+                                topic={key}
+                                key={key} />
+                );
+            }, this);
+            return (
+                    <div className="contacts-panel">
+                        <ul className="contact-box">
+                            {contactNodes}
+                        </ul>
+                    </div>
+            );
+        }
+    });
+
+    /* END Create new topic and invite users or send an invite */
+
+    /* BEGIN Conversation panel */
+    var Received = {
+        UNDEF: -2,
+        SENDING: -1,
+        SERVER: 0,
+        CLIENT: 1,
+        READ: 2
+    };
+
+    // Material colors, shade #200; 16 colors.
+    var messageColors = [
+        {bgColor: "#c5e1a5", color: "#212121"}, {bgColor: "#ef9a9a", color: "#212121"},
+        {bgColor: "#90caf9", color: "#212121"}, {bgColor: "#fff59d", color: "#212121"},
+        {bgColor: "#b0bec5", color: "#212121"}, {bgColor: "#f48fb1", color: "#212121"},
+        {bgColor: "#b39ddb", color: "#212121"}, {bgColor: "#9fa8da", color: "#212121"},
+        {bgColor: "#ffab91", color: "#212121"}, {bgColor: "#ffe082", color: "#212121"},
+        {bgColor: "#a5d6a7", color: "#212121"}, {bgColor: "#bcaaa4", color: "#212121"},
+        {bgColor: "#eeeeee", color: "#212121"}, {bgColor: "#80deea", color: "#212121"},
+        {bgColor: "#e6ee9c", color: "#212121"}, {bgColor: "#ce93d8", color: "#212121"}
+    ];
+    // Colors for user's own messages
+    var selfColor = {bgColor: "#fafafa", color: "#212121"};
+    var Message = React.createClass({
+        render: function() {
+            var liClass = (this.props.response ? "left" : "right") + " " + this.props.sequence;
+            var colors;
+            colors = this.props.response ? {
+                backgroundColor: messageColors[this.props.userIndex].bgColor,
+                borderColor: messageColors[this.props.userIndex].bgColor,
+                color: messageColors[this.props.userIndex].color
+            } : {
+                backgroundColor: selfColor.bgColor,
+                borderColor: selfColor.bgColor,
+                color: selfColor.color
+            };
+            var bubbleClass = (this.props.sequence === "single" || this.props.sequence === "last") ?
+                    "bubble tip" : "bubble";
+            return (
+                    <li className={liClass}>
+                        <div className={bubbleClass} style={colors}>
+                            <p>{this.props.content}
+                                <Message.ReceivedMarker response={this.props.response}
+                                                        timestamp={this.props.timestamp} received={this.props.received} />
+                            </p>
+                        </div>
+                    </li>
+            );
+        }
+    });
+
+    /* Received/read indicator */
+    Message.ReceivedMarker = React.createClass({
+        render: function() {
+            var timestamp = (this.props.received === Received.SENDING) ?
+                    "sending ..." :
+                    shortDateFormat(this.props.timestamp);
+            var marker = null;
+
+            if (this.props.received === Received.SENDING) {
+                marker = (<i className="material-icons small">access_time</i>); // watch face
+            } else if (this.props.received === Received.SERVER) {
+                marker = (<i className="material-icons small">done</i>); // checkmark
+            } else if (this.props.received === Received.CLIENT) {
+                marker = (<i className="material-icons small">done_all</i>); // double checkmark
+            } else if (this.props.received === Received.READ) {
+                marker = (<i className="material-icons small blue">done_all</i>); // open eye
+            }
+
+            return (
+                    <span className="pull-right timestamp">
+            {timestamp}{'\u00a0'}{marker}
+          </span>
+            );
+        }
+    });
+
+    var MessagesView = React.createClass({
+        mixins: [ContextMenuMixin],
+        getInitialState: function() {
+            return {
+                messages: [],
+                topic: '',
+                title: ''
+            };
+        },
+        // Scroll last message into view on component update e.g. on message received.
+        componentDidUpdate: function() {
+            var node = this.refs.messagesPanel;
+            if (node) {
+                node.scrollTop = node.scrollHeight;
+            }
+        },
+        componentWillMount: function() {
+            this.propsChange(this.props);
+        },
+        componentWillReceiveProps: function(nextProps) {
+            this.propsChange(nextProps);
+        },
+        propsChange: function(props) {
+            if (!props.topic) {
+                this.setState({messages: [], topic: null});
+            } else if (props.topic != this.state.topic) {
+                var msgs = [];
+                var topic = Tinode.getTopic(props.topic);
+                // Bind the new topic to component.
+                topic.onData = this.handleNewMessage;
+                topic.onInfo = this.handleInfoReceipt;
+                topic.onMetaDesc = this.handleDescChange;
+                topic.onSubsUpdated = this.handleSubsUpdated;
+                // Unbind the previous topic from this component.
+                if (this.state.topic) {
+                    var oldTopic = Tinode.getTopic(this.state.topic);
+                    oldTopic.onData = undefined;
+                    oldTopic.onInfo = undefined;
+                    oldTopic.onMetaDesc = undefined;
+                    oldTopic.onSubsUpdated = undefined;
+                }
+
+                if (topic.isSubscribed()) {
+                    this.handleDescChange(topic);
+                    topic.messages(function(msg) {
+                        msgs = msgs.concat(msg);
+                    });
+                } else {
+                    topic.subscribe({get: {desc: {}, sub: {}, data: {}}});
+                }
+
+                // The user switched to the new topic before the timer for
+                // the previous topic has triggered, kill it.
+                clearTimeout(this.readTimer);
+
+                this.setState({messages: msgs, topic: props.topic});
+            }
+        },
+        handleDescChange: function(desc) {
+            if (desc.public) {
+                this.setState({title: desc.public.fn});
+            }
+        },
+        handleSubsUpdated: function(uids) {
+            console.log("topic subscriptions updated");
+        },
+        handleNewMessage: function(msg) {
+            this.setState({messages: this.state.messages.concat(msg)});
+            // Aknowledge all messages, including own messges.
+            clearTimeout(this.readTimer);
+            this.readTimer = setTimeout(function() {
+                Tinode.getTopic(msg.topic).noteRead(msg.seq);
+            }, READ_DELAY);
+            this.props.onData(msg);
+        },
+        handleInfoReceipt: function(info) {
+            switch (info.what) {
+                case "kp":
+                    console.log("show typing notification");
+                    break;
+                case "read":
+                case "recv":
+                    // Redraw due to changed recv/read status.
+                    this.forceUpdate();
+                    break;
+                default:
+                    console.log("other change in topic: " + info.what);
+            }
+        },
+        render: function() {
+            var component = null;
+            if (this.state.topic) {
+                var messageNodes = [];
+                var myUid = Tinode.getCurrentUserID();
+                var topic = Tinode.getTopic(this.state.topic);
+                var previousFrom = null;
+                for (var i=0; i<this.state.messages.length; i++) {
+                    var msg = this.state.messages[i];
+                    var nextFrom = (i + 1 < this.state.messages.length) ? this.state.messages[i+1].from : null;
+                    var sequence = "single";
+                    if (msg.from === previousFrom) {
+                        if (msg.from === nextFrom) {
+                            sequence = "middle";
+                        } else {
+                            sequence = "last";
+                        }
+                    } else if (msg.from === nextFrom) {
+                        sequence = "first";
+                    }
+                    previousFrom = msg.from;
+
+                    var isReply = !(msg.from === myUid);
+                    var msgReceived = Received.UNDEF;
+                    if (!isReply) {
+                        if (topic.msgReadCount(msg.seq) > 0) {
+                            msgReceived = Received.READ;
+                        } else if (topic.msgRecvCount(msg.seq) > 0) {
+                            msgReceived = Received.CLIENT;
+                        } else {
+                            msgReceived = Received.SERVER;
+                        }
+                    }
+                    messageNodes.push(
+                            <Message content={msg.content} timestamp={msg.ts} response={isReply}
+                                     userIndex={msg.$userIndex} sequence={sequence} received={msgReceived} key={msg.seq} />
+                    );
+                }
+
+                var lastSeen = null;
+                var cont = Tinode.getMeTopic().getContact(this.state.topic);
+                if (cont && Tinode.getTopicType(cont.topic) === "p2p") {
+                    if (cont.online) {
+                        lastSeen = "online now";
+                    } else if (cont.seen) {
+                        lastSeen = "Last seen: " + shortDateFormat(cont.seen.when);
+                        // TODO(gene): also handle user agent in c.seen.ua
+                    }
+                }
+
+                component = (
+                        <div id="topic-view" className={this.props.hideSelf ? 'nodisplay' : null}>
+                            <div id="topic-caption-panel">
+                                {this.props.displayMobile ?
+                                        <a href="#" id="hide-message-view" onClick={this.props.onHideMessageView}>
+                                            <i className="material-icons big">arrow_back</i>
+                                        </a> :
+                                        null}
+                                <div id="topic-title-group">
+                                    <div id="topic-title" className="panel-title">{this.state.title}</div>
+                                    <div id="topic-last-seen">{lastSeen}</div>
+                                </div>
+                                <div id="topic-users">users online and menu buttons</div>
+                                <div>
+                                    <a href="#" onClick={this.handleContextClick}>
+                                        <i className="material-icons big">more_vert</i>
+                                    </a>
+                                </div>
+                            </div>
+                            <div id="messages-panel" ref="messagesPanel">
+                                <ul className="chat-box">
+                                    {messageNodes}
+                                </ul>
+                            </div>
+                            <MessagesView.Send topic={this.props.topic} sendMessage={this.props.sendMessage} />
+                        </div>
+                );
+            } else {
+                component = (
+                        <MessagesView.Dummy hideSelf={this.props.hideSelf}
+                                            serverVersion={this.props.serverVersion}
+                                            serverAddress={this.props.serverAddress} />
+                );
+            }
+            return component;
+        }
+    });
+
+    /* Send message form */
+    MessagesView.Send = React.createClass({
+        getInitialState:function() {
+            return {
+                message: '',
+                // Make initial keypress time as if it happened 5001 milliseconds in the past.
+                keypressTimestamp: new Date().getTime() - KEYPRESS_DELAY - 1
+            };
+        },
+        handleSend: function() {
+            var message = this.state.message.trim();
+            if (message) {
+                this.props.sendMessage(this.state.message.trim());
+                this.setState({message: ''});
+            }
+        },
+        /* Send on Enter key */
+        handleKeyPress: function(e) {
+            /* Remove this if you don't want Enter to trigger send */
+            if (e.key === 'Enter') {
+                this.handleSend();
+            }
+        },
+        handleMessageTyping: function(e) {
+            var newState = {message: e.target.value};
+            var now = new Date().getTime();
+            if (now - this.state.keypressTimestamp > KEYPRESS_DELAY) {
+                var topic = Tinode.getTopic(this.props.topic);
+                if (topic.isSubscribed()) {
+                    topic.noteKeyPress();
+                }
+                newState.keypressTimestamp = now;
+            }
+            this.setState(newState);
+        },
+        render: function() {
+            return (
+                    <div id="send-message-panel">
+                        <input id="sendMessage" type="text" placeholder="New message"
+                               value={this.state.message} onChange={this.handleMessageTyping} onKeyPress={this.handleKeyPress} />
+                        <a href="#" onClick={this.handleSend}>
+                            <i className="material-icons">send</i>
+                        </a>
+                    </div>
+            );
+        }
+    });
+
+    /* This is just a static page to display when no conversation is selected. */
+    MessagesView.Dummy = React.createClass({
+        render: function() {
+            var version = Tinode.getVersion() + " build " + document.lastModified;
+            return (
+                    <div id="dummy-view" className={this.props.hideSelf ? 'nodisplay' : null}>
+                        <div>
+                            <a href="https://github.com/tinode/chat/">
+                                <img id="logo" alt="logo" src="img/logo.svg" />
+                                <h2>Tinode Demo Chat</h2>
+                            </a>
+                            <p>Client: {version}</p>
+                            <p>Server: {this.props.serverVersion} ({this.props.serverAddress})</p>
+                        </div>
+                    </div>
+            );
+        }
+    });
+    /* END Conversation panel */
+
+    /* This is a div which covers the entire AppView and shows selected modal dialog box */
+    var ModalDialogWrapper = React.createClass({
+        render: function() {
+            var dialog = null;
+            switch (this.props.dialog) {
+                case "new-topic":
+                    dialog = <ModalDialogWrapper.NewTopic
+                            onOk={this.props.onOk}
+                            onCancel={this.props.onCancel} />;
+                    break;
+                default:
+                    break;
+            }
+            if (dialog) {
+                dialog = <div className="dialog-overlay">{dialog}</div>;
+            }
+            return dialog;
+        }
+    });
+
+    ModalDialogWrapper.NewTopic = React.createClass({
+        render: function() {
+            return (
+                    <div className="modal-dialog">
+                        <div className="title-panel">
+                            New topic
+                        </div>
+                        <div className="body-panel">Not implemented</div>
+                        <div className="dialog-buttons">
+                            <a href="#" onClick={this.props.onOk}>Yes</a>
+                            <a href="#" onClick={this.props.onCancel}>OK</a>
+                        </div>
+                    </div>
+            );
+        }
+    });
+    /* End of modal dialog wrapper */
+
+    /* The top-level class to hold all fuinctionality together */
+    var AppView = React.createClass({
+        getInitialState: function() {
+            return {
+                transport: null,
+                serverAddress: HOST,
+                sidePanelSelected: 'login',
+                sidePanelTitle: null,
+                sidePanelAvatar: null,
+                dialogSelected: null,
+                contextMenuVisible: false,
+                login: '',
+                password: '',
+                loggedIn: false,
+                errorText: '',
+                topicSelected: '',
+                loginDisabled: false,
+                subscriptions: {},
+                displayMobile: (window.innerWidth <= MEDIA_BREAKPOINT),
+                mobilePanel: 'sidepanel',
+                serverVersion: 'no connection'
+            };
+        },
+        componentDidMount: function() {
+            window.addEventListener('resize', this.handleResize);
+            Tinode.enableLogging(true, true);
+            Tinode.onConnect = this.handleConnected;
+            Tinode.onDisconnect = this.handleDisconnect;
+            this.tnSetup(this.state.serverAddress, this.state.transport);
+        },
+        // Setup transport (usually websocket) and server address. This will terminate connection with the server.
+        tnSetup: function(serverAddress, transport) {
+            Tinode.setup(APP_NAME, serverAddress, API_KEY, transport);
+        },
+        componentWillUnmount: function(){
+            window.removeEventListener('resize', this.handleResize);
+        },
+        handleResize: function(){
+            var mobile = document.documentElement.clientWidth <= MEDIA_BREAKPOINT;
+            if (this.state.displayMobile != mobile) {
+                this.setState({displayMobile: mobile});
+            }
+        },
+        // User clicked Login button in the side panel.
+        handleLoginRequest: function(login, password) {
+            var instance = this;
+            this.setState({loginDisabled: true, errorText: '', login: login, password: password});
+            if (Tinode.isConnected()) {
+                this.doLogin(login, password);
+            } else {
+                Tinode.connect().catch(function(err) {
+                    // Socket error
+                    instance.setState({loginDisabled: false, errorText: err.message});
+                });
+            }
+        },
+        // Connection succeeded.
+        handleConnected: function() {
+            var params = Tinode.getServerInfo();
+            this.setState({serverVersion: params.ver + " (" + (params.build ? params.build : "none") + ")"});
+            this.doLogin(this.state.login, this.state.password);
+        },
+        doLogin: function(login, password) {
+            var instance = this;
+
+            // Try t login with token. If token is not available, try password. If no password, ask for it.
+            var promise = null;
+            var token = Tinode.getLoginToken();
+            if (password) {
+                this.setState({password: null});
+                promise = Tinode.loginBasic(login, password);
+            } else if (token) {
+                promise = Tinode.loginToken(token.token);
+            } else {
+                this.setState({loginDisabled: false});
+            }
+
+            if (promise) {
+                this.setState({errorText: ''});
+                promise.then(function() {
+                    // Logged in fine, subscribe to 'me' attaching callbacks from the contacts view.
+                    var me = Tinode.getMeTopic();
+                    me.onMetaDesc = instance.tnMeMetaDesc;
+                    instance.setState({sidePanelSelected: "contacts", loggedIn: true});
+                    // Subscribe, fetch topic desc, the list of subscriptions, and messages (invites).
+                    me.subscribe({get: {desc: {}, sub: {}, data: {}}});
+                }).catch(function(err) {
+                    // Login failed, report error
+                    instance.setState({loginDisabled: false, errorText: err.message});
+                });
+            }
+        },
+        handleDisconnect: function() {
+            this.setState({
+                sidePanelSelected: 'login',
+                sidePanelTitle: null,
+                sidePanelAvatar: null,
+                dialogSelected: null,
+                loggedIn: false,
+                errorText: 'disconnected',
+                topicSelected: '',
+                loginDisabled: false,
+                subscriptions: {},
+                mobilePanel: 'sidepanel',
+                contextMenuVisible: false,
+                contextMenuPosition: {top: 0, left: 0},
+                contextMenuItems: null,
+                handleContextMenuClick: undefined,
+                serverVersion: 'no connection'
+            });
+        },
+        tnMeMetaDesc: function(desc) {
+            this.setState({
+                sidePanelTitle: desc.public.fn,
+                sidePanelAvatar: makeImageUrl(desc.public.photo)
+            });
+        },
+        // Sending "received" notifications
+        tnData: function(data) {
+            clearTimeout(this.receivedTimer);
+            this.receivedTimer = setTimeout(function() {
+                this.receivedTimer = undefined;
+                Tinode.getTopic(data.topic).noteRecv(data.seq);
+            }, RECEIVED_DELAY);
+        },
+        // User clicked on a contact in the side panel or deleted a contact.
+        handleTopicSelected: function(topicName) {
+            if (topicName) {
+                // Contact selected
+                this.setState({topicSelected: topicName, mobilePanel: 'topic-view'});
+            } else {
+                // Currently selected contact deleted
+                this.setState({topicSelected: null, mobilePanel: 'sidepanel'});
+            }
+        },
+        // In mobile view user requested to show sidepanel
+        handleHideMessageView: function() {
+            this.setState({mobilePanel: 'sidepanel'});
+        },
+        // User clicked on a message send button.
+        handleSendMessage: function(msg) {
+            var topic = Tinode.getTopic(this.state.topicSelected);
+            topic.publish(msg);
+        },
+        // User chose a Sign Up menu item.
+        handleNewAccount: function() {
+            this.setState({sidePanelSelected: 'register'});
+        },
+        // Actual registration of a new account.
+        handleNewAccountRequest: function(login_, password_, public_, private_) {
+            var instance = this;
+            Tinode.connect().then(function() {
+                return Tinode.createUserBasic(login_, password_,
+                        {login: "basic", public: public_, private: private_});
+            }).catch(function(err) {
+                instance.setState({errorText: err.message});
+            });
+        },
+        // User chose Settings menu item.
+        handleSettings: function() {
+            this.setState({sidePanelSelected: this.state.loggedIn ? 'edit-account' : 'settings'});
+        },
+        // User updated connection parameters - transport and server address
+        handleConnectionSettings: function(serverAddress, transport) {
+            this.setState({serverAddress: serverAddress, transport: transport, sidePanelSelected: 'login'});
+            this.tnSetup(serverAddress, transport);
+        },
+        // User clicked Cancel button in Setting or Sign Up panel.
+        handleSidepanelCancel: function() {
+            if (this.state.loggedIn) {
+                this.setState({sidePanelSelected: 'contacts'});
+            } else {
+                this.setState({sidePanelSelected: 'login'});
+            }
+        },
+        // User clicked a (+) menu item.
+        handleNewTopic: function() {
+            this.setState({sidePanelSelected: 'new-topic'});
+        },
+        // Create of a new topic. New P2P topic requires peer's name.
+        handleNewTopicRequest: function(peerName, vcard) {
+            var instance = this;
+
+            // Check if user clicked on an existing connection.
+            if (Tinode.getTopicType(peerName) === "p2p") {
+                instance.setState({
+                    errorText: '',
+                    topicSelected: peerName,
+                    sidePanelSelected: 'contacts',
+                    mobilePanel: 'topic-view'
+                });
+            } else {
+                var topic = peerName ? Tinode.newTopicWith(peerName) : Tinode.newTopic();
+                var params = {get: {desc: {}, data: {}}};
+                if (!peerName) {
+                    params.get.sub = {}; // Fetch subs for grp topics only. Subscriptions for a p2p topic are useless.
+                    params.set = {desc: {public: vcard}};
+                }
+                topic.subscribe(params).then(function() {
+                    instance.setState({
+                        errorText: '',
+                        topicSelected: topic.name,
+                        sidePanelSelected: 'contacts',
+                        mobilePanel: 'topic-view'
+                    });
+                }).catch(function(err) {
+                    instance.setState({errorText: err.message});
+                });
+            }
+        },
+        /** Called when the user enters a contact into the contact search field in the NewAccount panel
+         @param query {Array} is an array of contacts to search for
+         */
+        handleSearchContacts: function(query) {
+            var find = Tinode.getFndTopic();
+            find.setMeta({desc: {private: query}}).then(function() {
+                find.getMeta({sub: {}, desc: {}});
+            });
+        },
+        handleDialogCancel: function() {
+            this.setState({dialogSelected: null});
+        },
+        handleShowContextMenu: function(y, x, items, callback) {
+            var bounds = ReactDOM.findDOMNode(this).getBoundingClientRect();
+            // Ensure that menu is inside the app-container.
+            var hSize = 12 * REM_SIZE;
+            var vSize = REM_SIZE * (0.7 + items.length * 2.5);
+            var pos = {
+                left: (bounds.right - x < hSize) ? (x - bounds.left - hSize) : (x - bounds.left),
+                top: (bounds.bottom - y < vSize) ? (y - bounds.top - vSize) : (y - bounds.top)
+            };
+
+            this.setState({
+                contextMenuVisible: true,
+                contextMenuPosition: pos,
+                contextMenuItems: items,
+                handleContextMenuClick: callback
+            });
+        },
+        handleHideContextMenu: function() {
+            this.setState({
+                contextMenuVisible: false,
+                contextMenuPosition: {top: 0, left: 0},
+                contextMenuItems: null,
+                handleContextMenuClick: undefined
+            });
+        },
+        render: function() {
+            return (
+                    <div id="app-container">
+                        <ModalDialogWrapper
+                                dialog={this.state.dialogSelected}
+                                onOk={this.handleDialogCancel}
+                                onCancel={this.handleDialogCancel} />
+
+                        <ContextMenu
+                                position={this.state.contextMenuPosition}
+                                items={this.state.contextMenuItems}
+                                onResult={this.state.handleContextMenuClick}
+                                visible={this.state.contextMenuVisible}
+                                hide={this.handleHideContextMenu} />
+
+                        <SidepanelView
+                                displayMobile={this.state.displayMobile}
+                                hideSelf={(this.state.displayMobile && this.state.mobilePanel !== 'sidepanel')}
+                                state={this.state.sidePanelSelected}
+                                title={this.state.sidePanelTitle}
+                                avatar={this.state.sidePanelAvatar}
+                                subscriptions={this.state.subscriptions}
+                                login={this.state.login}
+                                loginDisabled={this.state.loginDisabled}
+                                errorText={this.state.errorText}
+                                topicSelected={this.state.topicSelected}
+
+                                serverAddress={this.state.serverAddress}
+                                onConnectionSettings={this.handleConnectionSettings}
+
+                                onSignUp={this.handleNewAccount}
+                                onSettings={this.handleSettings}
+                                onLoginRequest={this.handleLoginRequest}
+                                onCreateAccount={this.handleNewAccountRequest}
+                                onTopicSelected={this.handleTopicSelected}
+                                onSearchContacts={this.handleSearchContacts}
+                                onCreateTopic={this.handleNewTopicRequest}
+                                onNewTopic={this.handleNewTopic}
+                                onCancel={this.handleSidepanelCancel}
+                                showContextMenu={this.handleShowContextMenu} />
+
+                        <MessagesView
+                                onHideMessageView={this.handleHideMessageView}
+                                displayMobile={this.state.displayMobile}
+                                hideSelf={(this.state.displayMobile && this.state.mobilePanel !== 'topic-view')}
+                                topic={this.state.topicSelected}
+                                serverVersion={this.state.serverVersion}
+                                serverAddress={this.state.serverAddress}
+                                onData={this.tnData}
+                                showContextMenu={this.handleShowContextMenu}
+                                sendMessage={this.handleSendMessage} />
+
+                    </div>
+            );
+        }
+    })
+
+    ReactDOM.render(
+            <AppView />,
+            document.getElementById('mountPoint')
+    );
+</script>
+</body>
+</html>
